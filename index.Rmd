@@ -1,0 +1,117 @@
+---
+title: "Practical Machine Learning"
+author: "Martin Hughes"
+date: "April 16, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+Common personal fitness devices collect data on an individual's movement using accelerometers, gyroscopes, and magnetometers. This study attempts to use data from these devices to determine if an
+individual is using proper form when performing Unilateral Dumbbell Biceps Curls. Subjects in the
+study were asked to perform the excersize using five different forms labeled A through E. Form A is the correct form, while the other forms are improper. Data collected from four different sensors is
+analyzed to determine if machine learning can detect while of the five forms was used.
+
+## Data Preparation
+
+Training and testing data was downloaded from https://d396qusza40orc.cloudfront.net/predmachlearn.
+The original source of this data was from the original study that is available here: 
+http://groupware.les.inf.puc-rio.br/har.
+
+The data contains many columns that has no data for most of the samples. These columns will be
+eliminated as well as the many of the first columns that contain data that are not predictors. I 
+debated if I should remove the column that contained the subject's name since it would likely be
+a good predictor for the outcome since every individual likely performed the exercise slightly
+differently, but I decided that its inclusion would lead to oversampling and reduce accruacy when
+predicting using new subjects. We then split the data into a trainging and validation set.
+
+```{r libs, results="hide"}
+library(caret)
+library(randomForest)
+library(lattice)
+library(doParallel)
+registerDoParallel(makeCluster(detectCores()))
+```
+```{r readdata, cache=TRUE}
+# Read the data
+url_base <- "http://d396qusza40orc.cloudfront.net/predmachlearn/"
+train_data <- read.csv(url(paste(url_base, "pml-training.csv", sep="")),
+                       na.strings=c("NA","#DIV/0!",""))
+test_data <- read.csv(url(paste(url_base, "pml-testing.csv", sep="")),
+                      na.strings=c("NA","#DIV/0!",""))
+```
+```{r cleandata}
+# Find columns with mostly NAs
+eliminate <- sapply(train_data, function(x) mean(is.na(x))) > 0.50
+# Add in columns with near zero variance
+eliminate <- eliminate | nearZeroVar(train_data, saveMetrics=TRUE)$nzv
+# Add in the first seven columns since they have no predictive value
+eliminate <- eliminate | c(replicate(7, TRUE), replicate(ncol(train_data) - 7, FALSE))
+# Eliminate the targeted columns in both training and test data
+train_data <- train_data[,!as.vector(eliminate)]
+test_data <- test_data[,!as.vector(eliminate)]
+# Split the data into training and validation sets
+# Set a seed for repeatability reasons
+set.seed(42)
+intrain <- createDataPartition(train_data$classe, p = 0.70, list = FALSE)
+training <- train_data[intrain, ]
+validation <- train_data[-intrain, ]
+
+```
+
+## Machine Learing Models
+
+This is a classification problem so random forests and generalized boosting are good choices to use. We will also train a decision tree which
+we suspect is too simple of a model for data this complex. For each model, we will use 10 fold cross-validation
+
+### Random Forests
+
+First we will try train the random forests model.
+
+```{r rftrain, results="hide"}
+# use 10-fold validation
+control <- trainControl(method = "cv", number = 10)
+rf_model <- train(classe ~ ., data=training, method="rf", trControl=control, verbose=FALSE)
+```
+
+### Generalized Boosted Regression
+
+Next we will trian a Generlized Boosted Regression model.
+``` {r gbmtrain, results="hide"}
+gbm_model <- train(classe ~ ., data=training, method="gbm", trControl=control, verbose=FALSE)
+```
+
+### Decision Tree
+
+Finally we will train a Decision Tree model.
+```{r dt}
+dt_model <- train(classe ~ ., data=training, method="rpart", trControl=control)
+```
+
+## Model Comparision
+
+First we resample the data and compare the Kappa values for the three models 
+```{r modelcomp}
+comp <- resamples(list(rf=rf_model, gbm=gbm_model, dt=dt_model))
+summary(comp)
+```
+We wil use the Kappa values for this analysis. Random Forest appears to better model than a Generlized Boosted Regression model and much better than a Decision Tree when applied to the training data. We will use Random Forest for the rest of the study
+
+## Validaion
+
+Next, we will validate the Random Forest model. The predict function of ConfusionMatrix validates the model using our validation data.
+```{r validate}
+confusionMatrix(validation$classe, predict(rf_model, validation))
+```
+The Random Forest yielded excellent results on our out of sample data. The accuracy was 99.32% or stated another way, the out of sample prediction error was only 0.68%. The Kappa value was also extremely high. Random Forest is indeed an excellent model for this data set!
+
+## Test Set Predictions
+
+Finally we will predict the outcomes using the test data set and the random forest model. The output of this will be used to answer the week 4 quiz questions.
+```{r test}
+print(as.data.frame(predict(rf_model, test_data)))
+```
